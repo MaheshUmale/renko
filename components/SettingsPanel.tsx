@@ -27,6 +27,37 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) 
       
       <section className="flex flex-col gap-3">
         <h3 className="text-[9px] font-bold text-gray-600 uppercase tracking-widest">Feed Control</h3>
+        <div className="flex flex-col gap-2 p-2 bg-black/40 border border-white/5 rounded">
+           <span className="text-[8px] font-bold text-gray-500 uppercase">Data Source</span>
+           <select 
+             value={settings.dataSource} 
+             onChange={(e) => update('dataSource', e.target.value)}
+             className="bg-[#0d1117] border border-[#30363d] text-[10px] text-white py-1 rounded focus:outline-none"
+           >
+             <option value="mock">Simulated (Resampling)</option>
+             <option value="ws">WebSocket Feed</option>
+             <option value="custom">Imported Static</option>
+           </select>
+           
+           {settings.dataSource === 'ws' && (
+             <div className="flex flex-col gap-1 mt-1">
+               <input 
+                 type="text" 
+                 value={settings.wsUrl} 
+                 onChange={(e) => update('wsUrl', e.target.value)}
+                 className="bg-[#0d1117] border border-[#30363d] text-[10px] text-white p-1 rounded font-mono"
+                 placeholder="ws://url:port"
+               />
+               <button 
+                 onClick={() => update('wsUrl', settings.wsUrl)} // Triggers useEffect in App
+                 className="bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold py-1 rounded transition-colors"
+               >
+                 Reconnect
+               </button>
+             </div>
+           )}
+        </div>
+
         <ToggleItem label="Live Follow" active={settings.isLiveFollow} onClick={() => toggle('isLiveFollow')} />
         <div className="grid grid-cols-2 gap-1 p-1 bg-black/60 rounded-sm border border-[#30363d]">
            {['CANDLE', 'RENKO'].map(m => (
@@ -55,7 +86,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) 
 
       <div className="mt-auto pt-6 border-t border-[#30363d]">
         <div className="flex justify-between items-center text-[9px] font-bold text-gray-700 uppercase">
-          <span>Build: V2025.04</span>
+          <span>Build: V2025.HFT</span>
           <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></div>
         </div>
       </div>

@@ -1,6 +1,12 @@
 
 export type Timeframe = '1s' | '1m' | '5m' | '15m' | '1h';
 
+export interface Tick {
+  timestamp: number; // unix ms or seconds
+  ltp: number;      // Last Traded Price
+  ltq: number;      // Last Traded Quantity
+}
+
 export interface OHLCV {
   time: number;
   open: number;
@@ -36,6 +42,10 @@ export interface IndicatorSettings {
   
   heatmapIntensity: number;
   evwmaLength: number;
+  
+  // Data Source Config
+  dataSource: 'mock' | 'ws' | 'custom';
+  wsUrl: string;
 }
 
 export interface VolumeProfileBucket {

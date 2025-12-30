@@ -1,5 +1,5 @@
 
-import { OHLCV, IndicatorSettings, IndicatorOutput, VolumeProfileBucket, RenkoBrick } from '../types';
+import { OHLCV, IndicatorSettings, IndicatorOutput, VolumeProfileBucket, RenkoBrick, Tick } from '../types';
 
 export const TA = {
   sma: (data: (number | undefined)[], period: number) => {
@@ -77,17 +77,62 @@ export const TA = {
   }
 };
 
+/**
+ * Resamples a single tick into the current OHLCV data stream
+ */
+export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds: number): OHLCV[] {
+  // Normalize timestamp to start of interval
+  const tickTime = Math.floor((tick.timestamp > 1e11 ? tick.timestamp / 1000 : tick.timestamp) / timeframeSeconds) * timeframeSeconds;
+  
+  if (currentData.length === 0) {
+    return [{
+      time: tickTime,
+      open: tick.ltp,
+      high: tick.ltp,
+      low: tick.ltp,
+      close: tick.ltp,
+      volume: tick.ltq
+    }];
+  }
+
+  const last = currentData[currentData.length - 1];
+  const updatedData = [...currentData];
+
+  if (tickTime === last.time) {
+    // Update existing candle
+    updatedData[updatedData.length - 1] = {
+      ...last,
+      high: Math.max(last.high, tick.ltp),
+      low: Math.min(last.low, tick.ltp),
+      close: tick.ltp,
+      volume: last.volume + tick.ltq
+    };
+  } else if (tickTime > last.time) {
+    // New candle
+    updatedData.push({
+      time: tickTime,
+      open: tick.ltp,
+      high: tick.ltp,
+      low: tick.ltp,
+      close: tick.ltp,
+      volume: tick.ltq
+    });
+  }
+  
+  // Keep memory manageable
+  if (updatedData.length > 5000) return updatedData.slice(updatedData.length - 5000);
+  return updatedData;
+}
+
 export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: IndicatorSettings): IndicatorOutput[] {
   const close = data.map(d => d.close), high = data.map(d => d.high), low = data.map(d => d.low), open = data.map(d => d.open), volume = data.map(d => d.volume);
   const len0 = 9, len1 = 26, len2 = 13, highLevel = 70, lowLevel = 30, cou0 = 3;
 
-  // TCI
   const emaPriceLen0 = TA.ema(close, len0);
   const diffPriceEma = close.map((p, i) => emaPriceLen0[i] !== undefined ? p - emaPriceLen0[i]! : 0);
   const emaAbsDiff = TA.ema(diffPriceEma.map(v => Math.abs(v)), len0);
   const tci = TA.ema(diffPriceEma.map((v, i) => emaAbsDiff[i] !== undefined ? v / (0.025 * emaAbsDiff[i]!) : 0), len1).map(v => (v || 0) + 50);
 
-  // MF
   const mf = close.map((_, i) => {
     if (i < len2) return 50;
     let uS = 0, dS = 0;
@@ -98,15 +143,12 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
     return 100 - (100 / (1 + (uS / (dS || 1))));
   });
 
-  // Willy
   const hiL1 = TA.highest(close, len1), loL1 = TA.lowest(close, len1);
   const willy = close.map((p, i) => (hiL1[i] !== undefined && loL1[i] !== undefined && hiL1[i] !== loL1[i]) ? 60 * (p - hiL1[i]!) / (hiL1[i]! - loL1[i]!) + 80 : 50);
 
-  // GodMode
   const rsiL2 = TA.rsi(close, len2);
   const godMode = close.map((_, i) => ((tci[i] || 50) + (mf[i] || 50) + (willy[i] || 50) + (rsiL2[i] || 50)) / 4);
 
-  // Vol_S_R (Persistent Levels)
   let grC = 0, gsC = 0;
   const srOut = godMode.map((gm, i) => {
     if (gm > highLevel) grC++; else grC = 0;
@@ -126,7 +168,6 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
     if (srOut[i].gsdl === undefined) srOut[i].gsdl = srOut[i-1].gsdl;
   }
 
-  // S/R Dots
   const stdP = 48, stdM = 4, stdDevV = TA.stdev(volume, stdP), avgV = TA.sma(volume, stdP);
   let sL: number | undefined, rL: number | undefined;
   const dots = volume.map((v, i) => {
@@ -135,7 +176,6 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
     return { s: sL, r: rL };
   });
 
-  // EMAs & VWAP
   const ema9 = TA.ema(close, 9);
   const ema20 = TA.ema(close, 20);
   const ema200 = TA.ema(close, 200);
@@ -147,7 +187,6 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
     return cumPV / (cumV || 1);
   });
 
-  // eVWMA
   const evwma = new Array(data.length).fill(0);
   for (let i = 0; i < data.length; i++) {
     let sV = 0, lb = Math.min(i + 1, settings.evwmaLength);
