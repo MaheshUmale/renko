@@ -1,0 +1,5 @@
+{
+  "name": "VolWill MF Order Block 2025",
+  "description": "A high-performance trading indicator dashboard porting complex PineScript logic into React. Features volume-based analysis, GodMode oscillators, dynamic pivots, and elastic volume-weighted moving averages (eVWMA).",
+  "requestFramePermissions": []
+}
