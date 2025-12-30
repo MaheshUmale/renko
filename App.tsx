@@ -29,6 +29,7 @@ const App: React.FC = () => {
   const [data, setData] = useState<OHLCV[]>([]);
   const [settings, setSettings] = useState<IndicatorSettings>(INITIAL_SETTINGS);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(true);
   const [wsStatus, setWsStatus] = useState<'IDLE' | 'CONNECTING' | 'CONNECTED' | 'ERROR'>('IDLE');
   
   const wsRef = useRef<WebSocket | null>(null);
@@ -145,6 +146,12 @@ const App: React.FC = () => {
           )}
           <button onClick={loadMoreHistory} className="px-3 py-1.5 bg-[#161b22] hover:bg-[#30363d] rounded-sm text-[9px] font-bold border border-white/10 transition-all uppercase tracking-widest text-gray-400">History+</button>
           <button onClick={() => setShowImportModal(true)} className="px-3 py-1.5 bg-[#161b22] hover:bg-[#30363d] rounded-sm text-[9px] font-bold border border-white/10 transition-all uppercase tracking-widest text-gray-400">Feed Manager</button>
+          <button 
+            onClick={() => setIsSettingsOpen(!isSettingsOpen)} 
+            className={`px-3 py-1.5 rounded-sm text-[9px] font-bold border transition-all uppercase tracking-widest ${isSettingsOpen ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-[#161b22] border-white/10 text-gray-400'}`}
+          >
+            {isSettingsOpen ? 'Close Settings' : 'Settings'}
+          </button>
           <div className={`flex items-center gap-3 bg-black/40 px-4 py-1.5 rounded-sm border ${settings.isLiveFollow ? 'border-red-500/20' : 'border-blue-500/10'}`}>
               <div className="flex gap-1">
                  <div className={`w-1.5 h-1.5 rounded-full ${settings.isLiveFollow ? 'bg-red-500 animate-pulse' : 'bg-blue-500'}`}></div>
@@ -156,7 +163,7 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
+      <main className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 min-w-0 bg-[#080a0d] relative">
           {data.length > 0 ? (
             <ChartComponent data={data} indicators={indicators} settings={settings} />
@@ -166,8 +173,20 @@ const App: React.FC = () => {
                <span className="mt-6 text-[10px] text-gray-600 font-black tracking-[0.4em] uppercase">Awaiting Feed Stream</span>
              </div>
           )}
+          
+          {!isSettingsOpen && (
+            <button 
+              onClick={() => setIsSettingsOpen(true)}
+              className="absolute right-0 top-1/2 -translate-y-1/2 bg-[#0d1117] border-l border-y border-blue-500/30 p-2 rounded-l-md hover:bg-[#161b22] transition-colors shadow-2xl z-20 group"
+            >
+              <div className="text-[10px] font-black text-blue-500 vertical-text tracking-widest uppercase [writing-mode:vertical-rl] group-hover:text-blue-400">Open Settings</div>
+            </button>
+          )}
         </div>
-        <SettingsPanel settings={settings} setSettings={setSettings} />
+        
+        <div className={`transition-all duration-300 ease-in-out h-full overflow-hidden ${isSettingsOpen ? 'w-64 border-l border-[#30363d]' : 'w-0 border-l-0'}`}>
+          <SettingsPanel settings={settings} setSettings={setSettings} isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+        </div>
       </main>
 
       <footer className="h-6 border-t border-white/5 flex items-center px-6 justify-between bg-[#0d1117] text-[9px] text-gray-700 font-black uppercase tracking-[0.2em] z-40">

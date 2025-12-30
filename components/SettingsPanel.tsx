@@ -5,9 +5,11 @@ import { IndicatorSettings } from '../types';
 interface SettingsPanelProps {
   settings: IndicatorSettings;
   setSettings: React.Dispatch<React.SetStateAction<IndicatorSettings>>;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
-const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) => {
+const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings, isOpen, onClose }) => {
   const toggle = (key: keyof IndicatorSettings) => {
     setSettings(prev => ({ ...prev, [key]: !prev[key] }));
   };
@@ -16,13 +18,26 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) 
     setSettings(prev => ({ ...prev, [key]: val }));
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="w-64 bg-[#0d1117] border-l border-[#30363d] h-full overflow-y-auto p-5 flex flex-col gap-6 select-none shadow-2xl z-30">
-      <div className="flex flex-col">
-        <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-500">VolWill Suite</h2>
-        <div className="h-0.5 w-full bg-blue-900/30 mt-1 relative">
-           <div className="absolute top-0 left-0 h-full w-12 bg-blue-600"></div>
+    <div className="w-64 bg-[#0d1117] h-full overflow-y-auto p-5 flex flex-col gap-6 select-none shadow-2xl z-30 relative">
+      <div className="flex justify-between items-start">
+        <div className="flex flex-col">
+          <h2 className="text-[11px] font-black uppercase tracking-[0.3em] text-blue-500">VolWill Suite</h2>
+          <div className="h-0.5 w-full bg-blue-900/30 mt-1 relative">
+             <div className="absolute top-0 left-0 h-full w-12 bg-blue-600"></div>
+          </div>
         </div>
+        <button 
+          onClick={onClose} 
+          className="text-gray-600 hover:text-red-500 transition-colors"
+          title="Minimize Panel"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
       </div>
       
       <section className="flex flex-col gap-3">
@@ -32,7 +47,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) 
            <select 
              value={settings.dataSource} 
              onChange={(e) => update('dataSource', e.target.value)}
-             className="bg-[#0d1117] border border-[#30363d] text-[10px] text-white py-1 rounded focus:outline-none"
+             className="bg-[#0d1117] border border-[#30363d] text-[10px] text-white py-1 rounded focus:outline-none cursor-pointer"
            >
              <option value="mock">Simulated (Resampling)</option>
              <option value="ws">WebSocket Feed</option>
@@ -50,7 +65,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings }) 
                />
                <button 
                  onClick={() => update('wsUrl', settings.wsUrl)} // Triggers useEffect in App
-                 className="bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold py-1 rounded transition-colors"
+                 className="bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold py-1 rounded transition-colors shadow-lg shadow-blue-600/20"
                >
                  Reconnect
                </button>
