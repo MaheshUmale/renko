@@ -20,43 +20,22 @@ export interface RenkoBrick {
   isUp: boolean;
 }
 
-export interface TrapSignal {
-  index: number;
-  price: number;
-  type: 'BULL_TRAP' | 'BEAR_TRAP';
-  volumeIntensity: number;
-}
-
-export interface FVG {
-  top: number;
-  bottom: number;
-  startIndex: number;
-  isBullish: boolean;
-}
-
-export interface StructurePoint {
-  index: number;
-  price: number;
-  type: 'HH' | 'HL' | 'LH' | 'LL' | 'BOS' | 'CHOCH';
-}
-
 export interface IndicatorSettings {
   timeframe: Timeframe;
   chartMode: 'CANDLE' | 'RENKO';
   renkoBoxSize: number;
   showHeatmap: boolean;
-  showTraps: boolean;
-  showFVG: boolean;
-  showMarketStructure: boolean;
   showEVWMA: boolean;
-  showDynamicPivot: boolean;
-  showBuySellVol: boolean;
+  showVWAP: boolean;
+  showEMAs: boolean;
+  showVolBubbles: boolean;
+  showSRDots: boolean;
+  showVolSR: boolean;
+  showGodMode: boolean;
+  isLiveFollow: boolean;
   
   heatmapIntensity: number;
-  trapThreshold: number; 
   evwmaLength: number;
-  pivotPeriod: number;
-  buySellPeriod: number;
 }
 
 export interface VolumeProfileBucket {
@@ -65,16 +44,30 @@ export interface VolumeProfileBucket {
   intensity: number; 
 }
 
+export interface SRLevels {
+  gsh?: number;
+  gsl?: number;
+  grh?: number;
+  grl?: number;
+  gsdh?: number;
+  gsdl?: number;
+}
+
 export interface IndicatorOutput {
+  index: number;
   evwma?: number;
-  dynPivot?: number;
-  buyVol: number;
-  sellVol: number;
+  vwap?: number;
+  ema9?: number;
+  ema20?: number;
+  ema200?: number;
   delta: number;
-  isVolSpike: boolean;
+  normVol: number;
   candleColor: string;
-  fvgs: FVG[];
-  structure: StructurePoint[];
-  traps: TrapSignal[];
-  poc: number;
+  godModeValue: number;
+  srLevels: SRLevels;
+  srDots: {
+    s?: number;
+    r?: number;
+  };
+  bubbleSize: number;
 }
