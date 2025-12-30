@@ -3,8 +3,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ChartComponent from './components/ChartComponent';
 import SettingsPanel from './components/SettingsPanel';
 import DataImportModal from './components/DataImportModal';
-import { generateMockData, calculateIndicators, calculateRenkoBricks, timeframeToSeconds, resampleTick } from './services/indicators';
-import { IndicatorSettings, OHLCV, Timeframe, Tick } from './types';
+import { generateMockData, calculateIndicators, calculateRenkoBricks, timeframeToSeconds, resampleTick, generateTradeSignals } from './services/indicators';
+import { IndicatorSettings, OHLCV, Timeframe, Tick, TradeSignal } from './types';
 
 const INITIAL_SETTINGS: IndicatorSettings = {
   timeframe: '1s',
@@ -106,12 +106,20 @@ const App: React.FC = () => {
     setData(prev => [...alignedHistorical, ...prev]);
   };
 
-  const indicators = useMemo(() => {
-    if (!data.length) return [];
+  const { indicators, signals } = useMemo(() => {
+    if (!data.length) return { indicators: [], signals: { signals: [], zones: [] } };
+    // Process indicators
     const processed = settings.chartMode === 'RENKO' 
       ? calculateRenkoBricks(data, settings.renkoBoxSize) 
       : data;
-    return calculateIndicators(processed, settings);
+    const inds = calculateIndicators(processed, settings);
+    
+    // Generate Signals based on OHLCV + Indicators
+    // We pass the raw OHLCV for signal generation for accuracy even if Renko is displayed
+    // but aligning indices might be tricky with Renko, so for now we generate signals on what is displayed.
+    const sigs = generateTradeSignals(processed as OHLCV[], inds);
+    
+    return { indicators: inds, signals: sigs };
   }, [data, settings]);
 
   return (
@@ -122,7 +130,7 @@ const App: React.FC = () => {
              <div className="w-8 h-8 bg-blue-600 rounded-sm flex items-center justify-center font-black italic text-white shadow-2xl shadow-blue-600/40 cursor-pointer" onClick={() => setSettings(p => ({...p, isLiveFollow: !p.isLiveFollow}))}>G</div>
              <div className="flex flex-col">
                <h1 className="text-[11px] font-black tracking-tighter uppercase leading-none">GODMODE_FLOW</h1>
-               <span className="text-[7px] text-blue-500 font-bold tracking-[0.3em] uppercase">V2025 Elite Resample</span>
+               <span className="text-[7px] text-blue-500 font-bold tracking-[0.3em] uppercase">Auto-Trader V1</span>
              </div>
            </div>
            <div className="flex items-center bg-black/40 rounded-sm border border-white/5 p-0.5">
@@ -166,7 +174,7 @@ const App: React.FC = () => {
       <main className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 min-w-0 bg-[#080a0d] relative">
           {data.length > 0 ? (
-            <ChartComponent data={data} indicators={indicators} settings={settings} />
+            <ChartComponent data={data} indicators={indicators} signals={signals} settings={settings} />
           ) : (
              <div className="w-full h-full flex flex-col items-center justify-center">
                <div className="w-12 h-12 border-2 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div>

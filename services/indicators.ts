@@ -1,5 +1,5 @@
 
-import { OHLCV, IndicatorSettings, IndicatorOutput, VolumeProfileBucket, RenkoBrick, Tick } from '../types';
+import { OHLCV, IndicatorSettings, IndicatorOutput, RenkoBrick, Tick, TradeSignal, ChartZone } from '../types';
 
 export const TA = {
   sma: (data: (number | undefined)[], period: number) => {
@@ -74,14 +74,25 @@ export const TA = {
       result.push(Math.sqrt(variance));
     }
     return result;
+  },
+  tr: (high: number[], low: number[], close: number[]) => {
+    const tr: number[] = [];
+    for(let i=0; i<high.length; i++) {
+      if (i===0) { tr.push(high[i]-low[i]); continue; }
+      const hl = high[i] - low[i];
+      const hc = Math.abs(high[i] - close[i-1]);
+      const lc = Math.abs(low[i] - close[i-1]);
+      tr.push(Math.max(hl, hc, lc));
+    }
+    return tr;
+  },
+  atr: (high: number[], low: number[], close: number[], period: number) => {
+    const tr = TA.tr(high, low, close);
+    return TA.sma(tr, period); 
   }
 };
 
-/**
- * Resamples a single tick into the current OHLCV data stream
- */
 export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds: number): OHLCV[] {
-  // Normalize timestamp to start of interval
   const tickTime = Math.floor((tick.timestamp > 1e11 ? tick.timestamp / 1000 : tick.timestamp) / timeframeSeconds) * timeframeSeconds;
   
   if (currentData.length === 0) {
@@ -99,7 +110,6 @@ export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds:
   const updatedData = [...currentData];
 
   if (tickTime === last.time) {
-    // Update existing candle
     updatedData[updatedData.length - 1] = {
       ...last,
       high: Math.max(last.high, tick.ltp),
@@ -108,7 +118,6 @@ export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds:
       volume: last.volume + tick.ltq
     };
   } else if (tickTime > last.time) {
-    // New candle
     updatedData.push({
       time: tickTime,
       open: tick.ltp,
@@ -119,7 +128,6 @@ export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds:
     });
   }
   
-  // Keep memory manageable
   if (updatedData.length > 5000) return updatedData.slice(updatedData.length - 5000);
   return updatedData;
 }
@@ -159,17 +167,18 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
       gsdh: (grC >= cou0 || gsC >= cou0) ? high[i] : undefined, gsdl: (grC >= cou0 || gsC >= cou0) ? low[i] : undefined
     };
   });
+  // Smoother Visualization for SR Lines
   for (let i = 1; i < srOut.length; i++) {
     if (srOut[i].gsh === undefined) srOut[i].gsh = srOut[i-1].gsh;
     if (srOut[i].gsl === undefined) srOut[i].gsl = srOut[i-1].gsl;
     if (srOut[i].grh === undefined) srOut[i].grh = srOut[i-1].grh;
     if (srOut[i].grl === undefined) srOut[i].grl = srOut[i-1].grl;
-    if (srOut[i].gsdh === undefined) srOut[i].gsdh = srOut[i-1].gsdh;
-    if (srOut[i].gsdl === undefined) srOut[i].gsdl = srOut[i-1].gsdl;
   }
 
   const stdP = 48, stdM = 4, stdDevV = TA.stdev(volume, stdP), avgV = TA.sma(volume, stdP);
   let sL: number | undefined, rL: number | undefined;
+  
+  // Logic for SR Dots: Identify high volume outliers
   const dots = volume.map((v, i) => {
     const condition = (v - (avgV[i] || 0)) > stdM * (stdDevV[i] || 0);
     if (condition) { if (close[i] > open[i]) sL = low[i]; else rL = high[i]; }
@@ -195,15 +204,214 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
     else { const fl = sV || 1; evwma[i] = (evwma[i-1] * (fl - volume[i]) / fl) + (volume[i] * close[i] / fl); }
   }
 
+  const atr = TA.atr(high, low, close, 14);
+
   return data.map((d, i) => {
     const nv = stdDevV[i] ? (volume[i] - (avgV[i] || 0)) / stdDevV[i]! : 0;
     return {
       index: i, evwma: evwma[i], vwap: vwap[i], ema9: ema9[i], ema20: ema20[i], ema200: ema200[i],
       delta: (d.close > d.open ? 1 : -1) * d.volume, normVol: nv,
       candleColor: d.close >= d.open ? '#22c55e' : '#ef4444', godModeValue: godMode[i], srLevels: srOut[i], srDots: dots[i],
-      bubbleSize: Math.max(0, nv * 1.5)
+      bubbleSize: Math.max(0, nv * 1.5),
+      atr: atr[i]
     };
   });
+}
+
+/**
+ * Advanced Trading Engine
+ * Step 1: Zone Identification (S/R Memory)
+ * Step 2: Setup (Price re-visits Zone)
+ * Step 3: Trigger (Volume Effort + Reversal)
+ * Step 4: Execution & Active Monitoring (Trailing SL)
+ */
+export function generateTradeSignals(data: OHLCV[], indicators: IndicatorOutput[]): { signals: TradeSignal[], zones: ChartZone[] } {
+  const signals: TradeSignal[] = [];
+  const zones: ChartZone[] = [];
+  let currentPosition: TradeSignal | null = null;
+  
+  // Track Active Zones
+  const activeSupportZones: ChartZone[] = [];
+  const activeResistanceZones: ChartZone[] = [];
+
+  const COOLDOWN = 10;
+  let lastExitIndex = -COOLDOWN;
+
+  for (let i = 50; i < data.length; i++) {
+    const d = data[i];
+    const ind = indicators[i];
+    const prevInd = indicators[i-1];
+    const atr = ind.atr || 0;
+    
+    // --- 1. ZONE MANAGEMENT ---
+    // If a new SR Dot appears, register it as a Zone
+    if (ind.srDots.s && indicators[i-1].srDots.s !== ind.srDots.s) {
+      const newZone: ChartZone = { type: 'SUPPORT', price: ind.srDots.s, startIndex: i, strength: 1 };
+      activeSupportZones.push(newZone);
+      zones.push(newZone);
+    }
+    if (ind.srDots.r && indicators[i-1].srDots.r !== ind.srDots.r) {
+      const newZone: ChartZone = { type: 'RESISTANCE', price: ind.srDots.r, startIndex: i, strength: 1 };
+      activeResistanceZones.push(newZone);
+      zones.push(newZone);
+    }
+
+    // Zone Clean-up: If price breaks through zone significantly, invalidate it
+    for (let z = activeSupportZones.length - 1; z >= 0; z--) {
+      if (d.close < activeSupportZones[z].price - atr * 0.5) { // Break support
+         activeSupportZones[z].endIndex = i;
+         activeSupportZones.splice(z, 1);
+      }
+    }
+    for (let z = activeResistanceZones.length - 1; z >= 0; z--) {
+      if (d.close > activeResistanceZones[z].price + atr * 0.5) { // Break resistance
+         activeResistanceZones[z].endIndex = i;
+         activeResistanceZones.splice(z, 1);
+      }
+    }
+
+
+    // --- 2. TRADE MANAGEMENT (Active Monitoring) ---
+    if (currentPosition) {
+      const isLong = currentPosition.type === 'LONG';
+      
+      // Add current SL to history for visualization
+      currentPosition.slHistory.push({ index: i, price: currentPosition.stopLoss });
+
+      // Check Exits
+      let exit = false;
+      let exitReason = '';
+      let pnl = 0;
+
+      if (isLong) {
+        if (d.low <= currentPosition.stopLoss) { exit = true; exitReason = 'SL_HIT'; pnl = currentPosition.stopLoss - currentPosition.entryPrice; }
+        else if (d.high >= currentPosition.takeProfit) { exit = true; exitReason = 'TP_HIT'; pnl = currentPosition.takeProfit - currentPosition.entryPrice; }
+      } else {
+        if (d.high >= currentPosition.stopLoss) { exit = true; exitReason = 'SL_HIT'; pnl = currentPosition.entryPrice - currentPosition.stopLoss; }
+        else if (d.low <= currentPosition.takeProfit) { exit = true; exitReason = 'TP_HIT'; pnl = currentPosition.entryPrice - currentPosition.takeProfit; }
+      }
+
+      if (exit) {
+        currentPosition.status = exitReason as any;
+        currentPosition.exitPrice = exitReason === 'SL_HIT' ? currentPosition.stopLoss : currentPosition.takeProfit;
+        currentPosition.exitIndex = i;
+        currentPosition.pnl = pnl;
+        signals.push(currentPosition);
+        currentPosition = null;
+        lastExitIndex = i;
+      } else {
+        // --- TRAILING STOP LOGIC ---
+        // 1. Move to Break Even if price moved 40% towards TP
+        const distToTP = Math.abs(currentPosition.takeProfit - currentPosition.entryPrice);
+        const currentDist = Math.abs(d.close - currentPosition.entryPrice);
+        
+        if (isLong) {
+           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss < currentPosition.entryPrice) {
+             currentPosition.stopLoss = currentPosition.entryPrice + atr * 0.1; // Slight profit guarantee
+           }
+           // Trail by 2 ATR if price goes higher
+           const newSL = d.high - 2.5 * atr;
+           if (newSL > currentPosition.stopLoss) {
+             currentPosition.stopLoss = newSL;
+           }
+        } else {
+           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss > currentPosition.entryPrice) {
+             currentPosition.stopLoss = currentPosition.entryPrice - atr * 0.1;
+           }
+           const newSL = d.low + 2.5 * atr;
+           if (newSL < currentPosition.stopLoss) {
+             currentPosition.stopLoss = newSL;
+           }
+        }
+      }
+
+      continue; // Skip entry logic if in position
+    }
+
+
+    // --- 3. ENTRY LOGIC (Setup + Trigger) ---
+    if (i - lastExitIndex < COOLDOWN) continue;
+
+    // LONG SCENARIO
+    // Setup: Price is near a known Support Zone (within 1 ATR)
+    const nearestSupport = activeSupportZones.find(z => Math.abs(d.low - z.price) < atr * 1.5 && d.low >= z.price - atr * 0.5);
+    
+    if (nearestSupport) {
+       // Trigger:
+       // 1. Rejection Wick (Close is in upper 50% of candle) OR Green Candle
+       // 2. Momentum turning up (GodMode crossed up or is low)
+       const isRejection = (d.close - d.low) > (d.high - d.low) * 0.6; // Hammer-ish
+       const isGreen = d.close > d.open;
+       const momemtumOk = ind.godModeValue < 45 && ind.godModeValue > prevInd.godModeValue;
+       
+       if ((isRejection || isGreen) && momemtumOk) {
+         const entry = d.close;
+         const sl = nearestSupport.price - atr * 0.5; // SL below the Zone
+         // TP at next resistance or 2:1
+         let tp = entry + (entry - sl) * 2;
+         const nextRes = activeResistanceZones.find(z => z.price > entry);
+         if (nextRes) tp = nextRes.price - atr * 0.2;
+
+         if ((tp - entry) / (entry - sl) > 1.2) { // Ensure at least 1.2 R:R
+            currentPosition = {
+              id: `L-${d.time}`,
+              index: i,
+              time: d.time,
+              type: 'LONG',
+              entryPrice: entry,
+              stopLoss: sl,
+              takeProfit: tp,
+              status: 'OPEN',
+              reason: `Zone Bounce @ ${nearestSupport.price.toFixed(2)}`,
+              slHistory: [{ index: i, price: sl }]
+            };
+            if (i === data.length - 1) signals.push(currentPosition);
+         }
+       }
+    }
+
+    // SHORT SCENARIO
+    // Setup: Price near Resistance Zone
+    const nearestRes = activeResistanceZones.find(z => Math.abs(d.high - z.price) < atr * 1.5 && d.high <= z.price + atr * 0.5);
+    
+    if (nearestRes) {
+       // Trigger: Rejection wick from top OR Red Candle
+       const isRejection = (d.high - d.close) > (d.high - d.low) * 0.6; // Shooting star-ish
+       const isRed = d.close < d.open;
+       const momemtumOk = ind.godModeValue > 55 && ind.godModeValue < prevInd.godModeValue;
+
+       if ((isRejection || isRed) && momemtumOk) {
+         const entry = d.close;
+         const sl = nearestRes.price + atr * 0.5;
+         let tp = entry - (sl - entry) * 2;
+         const nextSup = activeSupportZones.find(z => z.price < entry);
+         if (nextSup) tp = nextSup.price + atr * 0.2;
+
+         if ((entry - tp) / (sl - entry) > 1.2) {
+            currentPosition = {
+              id: `S-${d.time}`,
+              index: i,
+              time: d.time,
+              type: 'SHORT',
+              entryPrice: entry,
+              stopLoss: sl,
+              takeProfit: tp,
+              status: 'OPEN',
+              reason: `Zone Reject @ ${nearestRes.price.toFixed(2)}`,
+              slHistory: [{ index: i, price: sl }]
+            };
+            if (i === data.length - 1) signals.push(currentPosition);
+         }
+       }
+    }
+  }
+  
+  // Push open position if not already in list
+  if (currentPosition && !signals.find(s => s.id === currentPosition!.id)) {
+     signals.push(currentPosition);
+  }
+
+  return { signals, zones };
 }
 
 export function getVolumeProfile(data: (OHLCV | RenkoBrick)[], bins: number = 80) {

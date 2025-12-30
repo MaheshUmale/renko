@@ -80,4 +80,36 @@ export interface IndicatorOutput {
     r?: number;
   };
   bubbleSize: number;
+  atr?: number;
+}
+
+export interface TradeSignal {
+  id: string;
+  index: number;
+  time: number;
+  type: 'LONG' | 'SHORT';
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  status: 'OPEN' | 'TP_HIT' | 'SL_HIT' | 'CLOSED';
+  exitPrice?: number;
+  exitIndex?: number;
+  pnl?: number;
+  reason: string;
+  slHistory: { index: number, price: number }[]; // Track how SL moves over time
+}
+
+export interface ChartZone {
+  type: 'SUPPORT' | 'RESISTANCE';
+  price: number;
+  startIndex: number;
+  endIndex?: number;
+  strength: number;
+}
+
+export interface AIAnalysis {
+  confidenceScore: number; // 0 to 100
+  sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  reasoning: string;
+  riskFactors: string[];
 }
