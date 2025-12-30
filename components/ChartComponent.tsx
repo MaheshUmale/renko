@@ -333,6 +333,16 @@ const ChartComponent: React.FC<ChartProps> = ({ data, indicators, signals: { sig
   const vwapBias = lastPrice > (lastInd?.vwap || 0) ? 'BULLISH' : 'BEARISH';
   const godModeBias = (lastInd?.godModeValue || 50) > 50 ? 'BULLISH' : 'BEARISH';
 
+  // BACKTEST / STATS CALCULATION
+  const closedSignals = signals.filter(s => s.status === 'TP_HIT' || s.status === 'SL_HIT' || s.status === 'CLOSED');
+  const totalTrades = closedSignals.length;
+  const wins = closedSignals.filter(s => s.pnl && s.pnl > 0).length;
+  const winRate = totalTrades > 0 ? Math.round((wins / totalTrades) * 100) : 0;
+  const netPnL = closedSignals.reduce((acc, s) => acc + (s.pnl || 0), 0);
+  const grossProfit = closedSignals.reduce((acc, s) => acc + (s.pnl && s.pnl > 0 ? s.pnl : 0), 0);
+  const grossLoss = Math.abs(closedSignals.reduce((acc, s) => acc + (s.pnl && s.pnl < 0 ? s.pnl : 0), 0));
+  const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : grossProfit > 0 ? '∞' : '0.00';
+
   const handleAIValidation = async () => {
     if (!lastInd) return;
     setIsAnalyzing(true);
@@ -492,6 +502,43 @@ const ChartComponent: React.FC<ChartProps> = ({ data, indicators, signals: { sig
                    </span>
                 </div>
              </div>
+        </div>
+
+        {/* BACKTEST & STATS PANEL */}
+        <div className="bg-[#0d1117]/95 p-0 rounded-sm border border-white/10 shadow-2xl backdrop-blur-md w-full pointer-events-auto">
+             <div className="bg-[#161b22] px-3 py-1.5 border-b border-white/5 flex justify-between items-center">
+                <span className="text-[9px] font-black text-gray-300 uppercase tracking-widest">Strategy Audit</span>
+                <span className="text-[8px] text-gray-500 font-mono">PAPER TRADE</span>
+             </div>
+             
+             <div className="p-3">
+                {/* KEY METRICS GRID */}
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                   <StatBox label="Net PnL" value={netPnL.toFixed(2)} isPositive={netPnL >= 0} />
+                   <StatBox label="Win Rate" value={`${winRate}%`} isPositive={winRate >= 50} neutral={winRate === 0} />
+                   <StatBox label="Total Trades" value={totalTrades.toString()} />
+                   <StatBox label="Profit Factor" value={profitFactor} isPositive={parseFloat(profitFactor) > 1.5} />
+                </div>
+
+                {/* RECENT TRADES LIST */}
+                <div className="flex flex-col gap-1.5">
+                   <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">Recent Executions</span>
+                   <div className="flex flex-col gap-1 max-h-[80px] overflow-y-auto pr-1 custom-scrollbar">
+                     {closedSignals.slice().reverse().slice(0, 5).map(signal => (
+                       <div key={signal.id} className="flex justify-between items-center p-1.5 bg-black/40 border border-white/5 rounded text-[9px]">
+                         <div className="flex items-center gap-2">
+                           <span className={`font-black ${signal.type === 'LONG' ? 'text-cyan-400' : 'text-pink-400'}`}>{signal.type}</span>
+                           <span className="text-gray-500">{signal.status === 'TP_HIT' ? 'WIN' : 'LOSS'}</span>
+                         </div>
+                         <span className={`font-mono font-bold ${signal.pnl && signal.pnl > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                           {signal.pnl && signal.pnl > 0 ? '+' : ''}{signal.pnl?.toFixed(2)}
+                         </span>
+                       </div>
+                     ))}
+                     {closedSignals.length === 0 && <span className="text-[9px] text-gray-600 italic">No closed trades yet.</span>}
+                   </div>
+                </div>
+             </div>
           </div>
       </div>
 
@@ -509,6 +556,15 @@ const FactorRow: React.FC<{ label: string; value: string; isBullish: boolean; ne
   <div className="flex flex-col">
     <span className="text-[10px] text-gray-400 uppercase font-medium tracking-wide mb-0.5">{label}</span>
     <span className={`text-[11px] font-bold ${neutral ? (isBullish ? 'text-yellow-400' : 'text-gray-500') : (isBullish ? 'text-green-400' : 'text-red-400')}`}>
+      {value}
+    </span>
+  </div>
+);
+
+const StatBox: React.FC<{ label: string; value: string; isPositive?: boolean; neutral?: boolean }> = ({ label, value, isPositive, neutral }) => (
+  <div className="bg-black/20 p-2 rounded border border-white/5 flex flex-col">
+    <span className="text-[8px] text-gray-500 uppercase">{label}</span>
+    <span className={`text-[12px] font-black font-mono ${neutral ? 'text-gray-400' : isPositive === undefined ? 'text-white' : isPositive ? 'text-green-400' : 'text-red-400'}`}>
       {value}
     </span>
   </div>
