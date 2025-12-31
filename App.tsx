@@ -24,8 +24,8 @@ const INITIAL_SETTINGS: IndicatorSettings = {
   evwmaLength: 14,
   dataSource: 'mock',
   wsUrl: 'ws://localhost:8080',
-  upstoxAccessToken: 'eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTU0YTc0MjQ2NmZiMjEyODM2NjM2ODAiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NzE1NTUyMiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY3MjE4NDAwfQ.16xcu45V5ZPug7u6oKGeBZluYU7GEvVYqVCx9biobac',
-  upstoxInstrumentKey: 'NSE_FO|49229'
+  upstoxAccessToken: '',
+  upstoxInstrumentKey: ''
 };
 
 const App: React.FC = () => {
@@ -42,7 +42,6 @@ const App: React.FC = () => {
     if (settings.dataSource === 'mock') {
       setData(generateMockData(2000, timeframeToSeconds(settings.timeframe)));
     } else if (settings.dataSource === 'upstox') {
-      // Clear data when switching to Upstox to start fresh
       setData([]); 
     }
   }, [settings.timeframe, settings.dataSource]);
@@ -70,9 +69,7 @@ const App: React.FC = () => {
   // Handle Generic WebSocket Live Feed
   useEffect(() => {
     if (settings.dataSource !== 'ws') {
-      if (wsRef.current && settings.dataSource !== 'upstox') { // Don't close if switching to upstox handled elsewhere, but here we separate
-        // Actually, let's keep separate effects to avoid collision
-      }
+      // Don't close if switching to upstox handled elsewhere
       return;
     }
 
@@ -111,13 +108,11 @@ const App: React.FC = () => {
   useEffect(() => {
     if (settings.dataSource !== 'upstox') return;
     
-    // Check requirements
     if (!settings.upstoxAccessToken || !settings.upstoxInstrumentKey) {
       setWsStatus('IDLE');
       return;
     }
 
-    // Close any existing connection
     if (wsRef.current) {
        wsRef.current.close();
        wsRef.current = null;
@@ -127,8 +122,7 @@ const App: React.FC = () => {
 
     const connectUpstox = async () => {
       try {
-        // 1. Authorize and get WSS URL (USING V3 ENDPOINT)
-        const authResponse = await fetch('https://api.upstox.com/v3/feed/market-data-feed/authorize', {
+        const authResponse = await fetch('https://api.upstox.com/v2/feed/market-data-feed/authorize', {
           headers: {
             'Authorization': `Bearer ${settings.upstoxAccessToken}`,
             'Accept': 'application/json'
@@ -144,54 +138,70 @@ const App: React.FC = () => {
 
         const wssUrl = authJson.data.authorizedRedirectUri;
         const ws = new WebSocket(wssUrl);
-        ws.binaryType = 'arraybuffer'; // IMPORTANT for Protobuf
+        ws.binaryType = 'arraybuffer'; 
         wsRef.current = ws;
 
         ws.onopen = () => {
           setWsStatus('CONNECTED');
           console.log("Upstox Connected. Subscribing to", settings.upstoxInstrumentKey);
           
-          // 2. Send Subscription Payload
           const subscriptionPayload = {
-            guid: "guid-" + Date.now(),
+            guid: "some-guid",
             method: "sub",
             data: {
-              mode: "full", // FULL mode required for LTQ
+              mode: "full",
               instrumentKeys: [settings.upstoxInstrumentKey]
             }
           };
           
-          // V3 requires sending binary message
           const enc = new TextEncoder();
           const binaryPayload = enc.encode(JSON.stringify(subscriptionPayload));
           ws.send(binaryPayload); 
         };
 
         ws.onmessage = async (event) => {
-          if (event.data instanceof ArrayBuffer) {
-             const decoded = decodeUpstoxMessage(event.data);
-             if (decoded && decoded.feeds) {
-               // Extract data for our instrument
-               const feed = decoded.feeds[settings.upstoxInstrumentKey];
-               if (feed) {
-                  // Prioritize FullFeed -> LastTrade, then LTPC
-                  const lastTrade = feed.fullFeed?.lastTrade;
-                  const ltpc = feed.ltpc;
+          // Ensure we have an ArrayBuffer
+          let arrayBuffer: ArrayBuffer;
+          if (event.data instanceof Blob) {
+              arrayBuffer = await event.data.arrayBuffer();
+          } else if (event.data instanceof ArrayBuffer) {
+              arrayBuffer = event.data;
+          } else {
+              return; // Unknown format
+          }
 
-                  const ltp = lastTrade?.ltp || ltpc?.ltp;
-                  const ltq = lastTrade?.ltq || ltpc?.ltq || 0;
-                  const ltt = lastTrade?.ltt || ltpc?.ltt; // Unix Timestamp in ms
+          const decoded = decodeUpstoxMessage(arrayBuffer);
+             
+          if (decoded && decoded.feeds) {
+               // The map keys in the feed might not match the requested instrument key exactly if Upstox normalizes them,
+               // but typically they do. We iterate to find the match.
+               const feedKeys = Object.keys(decoded.feeds);
+               const targetKey = feedKeys.find(k => k === settings.upstoxInstrumentKey) || feedKeys[0];
+               const feed = decoded.feeds[targetKey];
+               
+               if (feed) {
+                  // Upstox V3 Feed Structure mapping
+                  // FullFeed might contain marketFF or indexFF
+                  const ff = feed.fullFeed?.marketFF || feed.fullFeed?.indexFF;
+                  const ltpc = feed.ltpc;
                   
-                  if (ltp && ltt) {
+                  // Extract values with fallbacks
+                  // Note: In proto3, defaults are 0, so check for truthiness carefully for prices.
+                  const ltp = ff?.ltpc?.ltp || ltpc?.ltp || ff?.lastTrade?.ltp;
+                  const ltt = ff?.ltpc?.ltt || ltpc?.ltt || ff?.lastTrade?.ltt; // timestamp
+                  const ltq = ff?.ltpc?.ltq || ltpc?.ltq || ff?.lastTrade?.ltq || 0; // quantity
+                  
+                  if (ltp) {
+                    const timestamp = ltt ? Number(ltt) / 1000 : Date.now() / 1000;
+                    
                     const tick: Tick = {
-                      timestamp: Number(ltt) / 1000, // Convert to seconds for our app
+                      timestamp: timestamp, 
                       ltp: ltp,
                       ltq: Number(ltq)
                     };
                     setData(prev => resampleTick(tick, prev, timeframeToSeconds(settings.timeframe)));
                   }
                }
-             }
           }
         };
 
