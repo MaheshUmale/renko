@@ -210,28 +210,34 @@ const App: React.FC = () => {
                const feed = decoded.feeds[targetKey];
                
                if (feed) {
-                  // Fallback Extraction Logic for different feed types (Index vs Market)
-                  // FullFeed > MarketFullFeed | IndexFullFeed
-                  const ff = feed.fullFeed?.marketFF || feed.fullFeed?.indexFF;
-                  const ltpc = feed.ltpc;
+                  // Upstox V3 Feed Structure Extraction
+                  // Structure: Feed -> (LTPC | FullFeed -> (MarketFF | IndexFF))
                   
-                  // Extract Data (Priority: Full Feed Last Trade > Full Feed LTPC > Top Level LTPC)
-                  // Proto defaults are 0, so check undefined or use truthiness carefully
-                  const ltp = ff?.lastTrade?.ltp || ff?.ltpc?.ltp || ltpc?.ltp;
-                  const ltt = ff?.lastTrade?.ltt || ff?.ltpc?.ltt || ltpc?.ltt; // timestamp
-                  const ltq = ff?.lastTrade?.ltq || ff?.ltpc?.ltq || ltpc?.ltq || 0; // volume
+                  // In V3, feed.ltpc, feed.fullFeed.marketFF.ltpc, or feed.fullFeed.indexFF.ltpc
+                  // hold the price data.
+                  const fullFeed = feed.fullFeed;
+                  const marketFF = fullFeed?.marketFF;
+                  const indexFF = fullFeed?.indexFF;
                   
-                  console.log("Upstox Tick Data:", { key: targetKey, ltp, ltq, ltt });
+                  // Try to find LTPC in hierarchy
+                  const ltpc = feed.ltpc || marketFF?.ltpc || indexFF?.ltpc;
 
-                  if (ltp) {
-                    const timestamp = ltt ? Number(ltt) / 1000 : Date.now() / 1000;
-                    
-                    const tick: Tick = {
-                      timestamp: timestamp, 
-                      ltp: Number(ltp),
-                      ltq: Number(ltq)
-                    };
-                    setData(prev => resampleTick(tick, prev, timeframeToSeconds(settings.timeframe)));
+                  if (ltpc) {
+                      const ltp = ltpc.ltp;
+                      const ltt = ltpc.ltt;
+                      const ltq = ltpc.ltq;
+                      
+                      console.log("Upstox Tick Data:", { key: targetKey, ltp, ltq, ltt });
+                      
+                      const timestamp = ltt ? Number(ltt) / 1000 : Date.now() / 1000;
+                      const tick: Tick = {
+                        timestamp: timestamp,
+                        ltp: Number(ltp),
+                        ltq: Number(ltq || 0)
+                      };
+                      setData(prev => resampleTick(tick, prev, timeframeToSeconds(settings.timeframe)));
+                  } else {
+                    console.log("Upstox: LTPC object not found in feed", feed);
                   }
                } else {
                  console.log("Upstox: Feed key not found in payload. Keys:", feedKeys);
