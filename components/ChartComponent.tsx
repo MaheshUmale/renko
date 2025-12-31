@@ -2,17 +2,17 @@
 import React, { useMemo, useRef, useEffect, useState } from 'react';
 import * as d3 from 'd3';
 import { OHLCV, IndicatorOutput, IndicatorSettings, RenkoBrick, TradeSignal, ChartZone, AIAnalysis } from '../types';
-import { getVolumeProfile, calculateRenkoBricks } from '../services/indicators';
+import { getVolumeProfile } from '../services/indicators';
 import { analyzeTradeSetup } from '../services/ai';
 
 interface ChartProps {
-  data: OHLCV[];
+  processedData: (OHLCV | RenkoBrick)[]; // Changed from raw data to processed
   indicators: IndicatorOutput[];
   signals: { signals: TradeSignal[], zones: ChartZone[] };
   settings: IndicatorSettings;
 }
 
-const ChartComponent: React.FC<ChartProps> = ({ data, indicators, signals: { signals, zones }, settings }) => {
+const ChartComponent: React.FC<ChartProps> = ({ processedData, indicators, signals: { signals, zones }, settings }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
   const transformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
@@ -21,12 +21,6 @@ const ChartComponent: React.FC<ChartProps> = ({ data, indicators, signals: { sig
   // AI State
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysis | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-  const processedData = useMemo(() => {
-    return settings.chartMode === 'RENKO' 
-      ? calculateRenkoBricks(data, settings.renkoBoxSize) 
-      : data;
-  }, [data, settings.renkoBoxSize, settings.chartMode]);
 
   useEffect(() => {
     const target = containerRef.current;

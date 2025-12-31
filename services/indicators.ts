@@ -92,6 +92,36 @@ export const TA = {
   }
 };
 
+export function aggregateCandles(baseData: OHLCV[], timeframeSeconds: number): OHLCV[] {
+  if (baseData.length === 0) return [];
+  
+  const aggregated: OHLCV[] = [];
+  let currentCandle: OHLCV | null = null;
+  
+  for (const bar of baseData) {
+     const bucketTime = Math.floor(bar.time / timeframeSeconds) * timeframeSeconds;
+     
+     if (!currentCandle || bucketTime !== currentCandle.time) {
+        if (currentCandle) aggregated.push(currentCandle);
+        currentCandle = {
+           time: bucketTime,
+           open: bar.open,
+           high: bar.high,
+           low: bar.low,
+           close: bar.close,
+           volume: bar.volume
+        };
+     } else {
+        currentCandle.high = Math.max(currentCandle.high, bar.high);
+        currentCandle.low = Math.min(currentCandle.low, bar.low);
+        currentCandle.close = bar.close;
+        currentCandle.volume += bar.volume;
+     }
+  }
+  if (currentCandle) aggregated.push(currentCandle);
+  return aggregated;
+}
+
 export function resampleTick(tick: Tick, currentData: OHLCV[], timeframeSeconds: number): OHLCV[] {
   const tickTime = Math.floor((tick.timestamp > 1e11 ? tick.timestamp / 1000 : tick.timestamp) / timeframeSeconds) * timeframeSeconds;
   
@@ -218,22 +248,12 @@ export function calculateIndicators(data: (OHLCV | RenkoBrick)[], settings: Indi
   });
 }
 
-/**
- * Advanced Trading Engine
- * Step 1: Zone Identification (S/R Memory)
- * Step 2: Setup (Price re-visits Zone)
- * Step 3: Trigger (Volume Effort + Reversal)
- * Step 4: Execution & Active Monitoring (Trailing SL)
- */
 export function generateTradeSignals(data: OHLCV[], indicators: IndicatorOutput[]): { signals: TradeSignal[], zones: ChartZone[] } {
   const signals: TradeSignal[] = [];
   const zones: ChartZone[] = [];
   let currentPosition: TradeSignal | null = null;
-  
-  // Track Active Zones
   const activeSupportZones: ChartZone[] = [];
   const activeResistanceZones: ChartZone[] = [];
-
   const COOLDOWN = 10;
   let lastExitIndex = -COOLDOWN;
 
@@ -243,45 +263,28 @@ export function generateTradeSignals(data: OHLCV[], indicators: IndicatorOutput[
     const prevInd = indicators[i-1];
     const atr = ind.atr || 0;
     
-    // --- 1. ZONE MANAGEMENT ---
-    // If a new SR Dot appears, register it as a Zone
+    // Zone Management
     if (ind.srDots.s && indicators[i-1].srDots.s !== ind.srDots.s) {
       const newZone: ChartZone = { type: 'SUPPORT', price: ind.srDots.s, startIndex: i, strength: 1 };
-      activeSupportZones.push(newZone);
-      zones.push(newZone);
+      activeSupportZones.push(newZone); zones.push(newZone);
     }
     if (ind.srDots.r && indicators[i-1].srDots.r !== ind.srDots.r) {
       const newZone: ChartZone = { type: 'RESISTANCE', price: ind.srDots.r, startIndex: i, strength: 1 };
-      activeResistanceZones.push(newZone);
-      zones.push(newZone);
+      activeResistanceZones.push(newZone); zones.push(newZone);
     }
 
-    // Zone Clean-up: If price breaks through zone significantly, invalidate it
     for (let z = activeSupportZones.length - 1; z >= 0; z--) {
-      if (d.close < activeSupportZones[z].price - atr * 0.5) { // Break support
-         activeSupportZones[z].endIndex = i;
-         activeSupportZones.splice(z, 1);
-      }
+      if (d.close < activeSupportZones[z].price - atr * 0.5) { activeSupportZones[z].endIndex = i; activeSupportZones.splice(z, 1); }
     }
     for (let z = activeResistanceZones.length - 1; z >= 0; z--) {
-      if (d.close > activeResistanceZones[z].price + atr * 0.5) { // Break resistance
-         activeResistanceZones[z].endIndex = i;
-         activeResistanceZones.splice(z, 1);
-      }
+      if (d.close > activeResistanceZones[z].price + atr * 0.5) { activeResistanceZones[z].endIndex = i; activeResistanceZones.splice(z, 1); }
     }
 
-
-    // --- 2. TRADE MANAGEMENT (Active Monitoring) ---
+    // Trade Management
     if (currentPosition) {
       const isLong = currentPosition.type === 'LONG';
-      
-      // Add current SL to history for visualization
       currentPosition.slHistory.push({ index: i, price: currentPosition.stopLoss });
-
-      // Check Exits
-      let exit = false;
-      let exitReason = '';
-      let pnl = 0;
+      let exit = false, exitReason = '', pnl = 0;
 
       if (isLong) {
         if (d.low <= currentPosition.stopLoss) { exit = true; exitReason = 'SL_HIT'; pnl = currentPosition.stopLoss - currentPosition.entryPrice; }
@@ -300,117 +303,59 @@ export function generateTradeSignals(data: OHLCV[], indicators: IndicatorOutput[
         currentPosition = null;
         lastExitIndex = i;
       } else {
-        // --- TRAILING STOP LOGIC ---
-        // 1. Move to Break Even if price moved 40% towards TP
+        // Trailing Stop Logic
         const distToTP = Math.abs(currentPosition.takeProfit - currentPosition.entryPrice);
         const currentDist = Math.abs(d.close - currentPosition.entryPrice);
-        
         if (isLong) {
-           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss < currentPosition.entryPrice) {
-             currentPosition.stopLoss = currentPosition.entryPrice + atr * 0.1; // Slight profit guarantee
-           }
-           // Trail by 2 ATR if price goes higher
+           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss < currentPosition.entryPrice) currentPosition.stopLoss = currentPosition.entryPrice + atr * 0.1;
            const newSL = d.high - 2.5 * atr;
-           if (newSL > currentPosition.stopLoss) {
-             currentPosition.stopLoss = newSL;
-           }
+           if (newSL > currentPosition.stopLoss) currentPosition.stopLoss = newSL;
         } else {
-           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss > currentPosition.entryPrice) {
-             currentPosition.stopLoss = currentPosition.entryPrice - atr * 0.1;
-           }
+           if (currentDist > distToTP * 0.4 && currentPosition.stopLoss > currentPosition.entryPrice) currentPosition.stopLoss = currentPosition.entryPrice - atr * 0.1;
            const newSL = d.low + 2.5 * atr;
-           if (newSL < currentPosition.stopLoss) {
-             currentPosition.stopLoss = newSL;
-           }
+           if (newSL < currentPosition.stopLoss) currentPosition.stopLoss = newSL;
         }
       }
-
-      continue; // Skip entry logic if in position
+      continue;
     }
 
-
-    // --- 3. ENTRY LOGIC (Setup + Trigger) ---
     if (i - lastExitIndex < COOLDOWN) continue;
 
-    // LONG SCENARIO
-    // Setup: Price is near a known Support Zone (within 1 ATR)
     const nearestSupport = activeSupportZones.find(z => Math.abs(d.low - z.price) < atr * 1.5 && d.low >= z.price - atr * 0.5);
-    
     if (nearestSupport) {
-       // Trigger:
-       // 1. Rejection Wick (Close is in upper 50% of candle) OR Green Candle
-       // 2. Momentum turning up (GodMode crossed up or is low)
-       const isRejection = (d.close - d.low) > (d.high - d.low) * 0.6; // Hammer-ish
+       const isRejection = (d.close - d.low) > (d.high - d.low) * 0.6;
        const isGreen = d.close > d.open;
        const momemtumOk = ind.godModeValue < 45 && ind.godModeValue > prevInd.godModeValue;
-       
        if ((isRejection || isGreen) && momemtumOk) {
-         const entry = d.close;
-         const sl = nearestSupport.price - atr * 0.5; // SL below the Zone
-         // TP at next resistance or 2:1
+         const entry = d.close, sl = nearestSupport.price - atr * 0.5;
          let tp = entry + (entry - sl) * 2;
          const nextRes = activeResistanceZones.find(z => z.price > entry);
          if (nextRes) tp = nextRes.price - atr * 0.2;
-
-         if ((tp - entry) / (entry - sl) > 1.2) { // Ensure at least 1.2 R:R
-            currentPosition = {
-              id: `L-${d.time}`,
-              index: i,
-              time: d.time,
-              type: 'LONG',
-              entryPrice: entry,
-              stopLoss: sl,
-              takeProfit: tp,
-              status: 'OPEN',
-              reason: `Zone Bounce @ ${nearestSupport.price.toFixed(2)}`,
-              slHistory: [{ index: i, price: sl }]
-            };
+         if ((tp - entry) / (entry - sl) > 1.2) {
+            currentPosition = { id: `L-${d.time}`, index: i, time: d.time, type: 'LONG', entryPrice: entry, stopLoss: sl, takeProfit: tp, status: 'OPEN', reason: `Zone Bounce`, slHistory: [{ index: i, price: sl }] };
             if (i === data.length - 1) signals.push(currentPosition);
          }
        }
     }
 
-    // SHORT SCENARIO
-    // Setup: Price near Resistance Zone
     const nearestRes = activeResistanceZones.find(z => Math.abs(d.high - z.price) < atr * 1.5 && d.high <= z.price + atr * 0.5);
-    
     if (nearestRes) {
-       // Trigger: Rejection wick from top OR Red Candle
-       const isRejection = (d.high - d.close) > (d.high - d.low) * 0.6; // Shooting star-ish
+       const isRejection = (d.high - d.close) > (d.high - d.low) * 0.6;
        const isRed = d.close < d.open;
        const momemtumOk = ind.godModeValue > 55 && ind.godModeValue < prevInd.godModeValue;
-
        if ((isRejection || isRed) && momemtumOk) {
-         const entry = d.close;
-         const sl = nearestRes.price + atr * 0.5;
+         const entry = d.close, sl = nearestRes.price + atr * 0.5;
          let tp = entry - (sl - entry) * 2;
          const nextSup = activeSupportZones.find(z => z.price < entry);
          if (nextSup) tp = nextSup.price + atr * 0.2;
-
          if ((entry - tp) / (sl - entry) > 1.2) {
-            currentPosition = {
-              id: `S-${d.time}`,
-              index: i,
-              time: d.time,
-              type: 'SHORT',
-              entryPrice: entry,
-              stopLoss: sl,
-              takeProfit: tp,
-              status: 'OPEN',
-              reason: `Zone Reject @ ${nearestRes.price.toFixed(2)}`,
-              slHistory: [{ index: i, price: sl }]
-            };
+            currentPosition = { id: `S-${d.time}`, index: i, time: d.time, type: 'SHORT', entryPrice: entry, stopLoss: sl, takeProfit: tp, status: 'OPEN', reason: `Zone Reject`, slHistory: [{ index: i, price: sl }] };
             if (i === data.length - 1) signals.push(currentPosition);
          }
        }
     }
   }
-  
-  // Push open position if not already in list
-  if (currentPosition && !signals.find(s => s.id === currentPosition!.id)) {
-     signals.push(currentPosition);
-  }
-
+  if (currentPosition && !signals.find(s => s.id === currentPosition!.id)) signals.push(currentPosition);
   return { signals, zones };
 }
 
@@ -431,16 +376,45 @@ export function getVolumeProfile(data: (OHLCV | RenkoBrick)[], bins: number = 80
 export function calculateRenkoBricks(data: OHLCV[], boxSize: number): RenkoBrick[] {
   if (!data.length) return [];
   const bricks: RenkoBrick[] = [];
-  let pC = Math.round(data[0].close / boxSize) * boxSize, rH = data[0].high, rL = data[0].low, rV = data[0].volume, sT = data[0].time;
+  
+  // Safe Initialization
+  let pC = Math.round(data[0].close / boxSize) * boxSize;
+  
+  // Ensure we have a valid starting point
+  let rH = data[0].high, rL = data[0].low, rV = data[0].volume, sT = data[0].time;
+  
   for (let i = 1; i < data.length; i++) {
-    const d = data[i]; rH = Math.max(rH, d.high); rL = Math.min(rL, d.low); rV += d.volume;
+    const d = data[i]; 
+    rH = Math.max(rH, d.high); 
+    rL = Math.min(rL, d.low); 
+    rV += d.volume;
+    
     const diff = d.close - pC;
+    
+    // Only generate brick if move > boxSize
     if (Math.abs(diff) >= boxSize) {
-      const nB = Math.floor(Math.abs(diff) / boxSize), isU = diff > 0;
+      const nB = Math.floor(Math.abs(diff) / boxSize);
+      const isU = diff > 0;
+      
       for (let j = 0; j < nB; j++) {
-        const bO = pC, bC = isU ? pC + boxSize : pC - boxSize;
-        bricks.push({ time: sT, open: bO, close: bC, high: j === 0 ? rH : Math.max(bO, bC), low: j === 0 ? rL : Math.min(bO, bC), volume: j === 0 ? rV : 0, isUp: isU });
-        pC = bC; rH = bC; rL = bC; rV = 0; sT = d.time;
+        const bO = pC;
+        const bC = isU ? pC + boxSize : pC - boxSize;
+        
+        bricks.push({ 
+          time: sT, 
+          open: bO, 
+          close: bC, 
+          high: j === 0 ? rH : Math.max(bO, bC), 
+          low: j === 0 ? rL : Math.min(bO, bC), 
+          volume: j === 0 ? rV : 0, 
+          isUp: isU 
+        });
+        
+        pC = bC; 
+        rH = bC; 
+        rL = bC; 
+        rV = 0; // Reset volume after brick formation
+        sT = d.time;
       }
     }
   }
