@@ -1,7 +1,12 @@
 
 import protobuf from "protobufjs";
+import Long from "long";
 
-// Exact content of MarketDataFeedV3.proto from Upstox
+// Configure Protobuf to use Long for 64-bit integers
+protobuf.util.Long = Long;
+protobuf.configure();
+
+// Official Upstox MarketDataFeedV3.proto definition
 const PROTO_STR = `
 syntax = "proto3";
 
@@ -92,12 +97,13 @@ enum Type {
 let FeedResponse: protobuf.Type | null = null;
 
 try {
+  // Parse the proto string to generate the runtime types
   const parsed = protobuf.parse(PROTO_STR, { keepCase: true });
   if (parsed.root) {
       FeedResponse = parsed.root.lookupType("com.upstox.marketdatafeeder.rpc.proto.FeedResponse");
   }
 } catch (error) {
-  console.error("Proto Parse Error:", error);
+  console.error("Upstox Proto Parse Error:", error);
 }
 
 export const decodeUpstoxMessage = (buffer: ArrayBuffer): any => {
@@ -105,16 +111,24 @@ export const decodeUpstoxMessage = (buffer: ArrayBuffer): any => {
     console.warn("Proto type not initialized");
     return null;
   }
+  
+  if (buffer.byteLength === 0) return null;
+
   try {
+    // Decode the binary buffer
     const decoded = FeedResponse.decode(new Uint8Array(buffer));
+    
+    // Convert to a plain JavaScript object
+    // Using simple options to avoid issues with specialized types
     return FeedResponse.toObject(decoded, {
-      longs: Number,
+      longs: String,  // output longs as strings to avoid precision loss in JS numbers
       enums: String,
       bytes: String,
       defaults: true,
       arrays: true
     });
-  } catch (err) {
+  } catch (err: any) {
+    // Log the full error to help debugging
     console.error("Upstox Decode Error:", err);
     return null;
   }

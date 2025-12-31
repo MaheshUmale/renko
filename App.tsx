@@ -1,4 +1,3 @@
-
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ChartComponent from './components/ChartComponent';
 import SettingsPanel from './components/SettingsPanel';
@@ -24,8 +23,9 @@ const INITIAL_SETTINGS: IndicatorSettings = {
   evwmaLength: 14,
   dataSource: 'mock',
   wsUrl: 'ws://localhost:8080',
-  upstoxAccessToken: '',
-  upstoxInstrumentKey: ''
+  // Hardcoded Token provided by user
+  upstoxAccessToken: 'eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI3NkFGMzUiLCJqdGkiOiI2OTU0YTc0MjQ2NmZiMjEyODM2NjM2ODAiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc2NzE1NTUyMiwiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzY3MjE4NDAwfQ.16xcu45V5ZPug7u6oKGeBZluYU7GEvVYqVCx9biobac',
+  upstoxInstrumentKey: 'NSE_FO|49229'
 };
 
 const App: React.FC = () => {
@@ -109,6 +109,7 @@ const App: React.FC = () => {
     if (settings.dataSource !== 'upstox') return;
     
     if (!settings.upstoxAccessToken || !settings.upstoxInstrumentKey) {
+      console.warn("Upstox Config Missing");
       setWsStatus('IDLE');
       return;
     }
@@ -122,7 +123,8 @@ const App: React.FC = () => {
 
     const connectUpstox = async () => {
       try {
-        const authResponse = await fetch('https://api.upstox.com/v2/feed/market-data-feed/authorize', {
+        // UPDATED ENDPOINT TO V3
+        const authResponse = await fetch('https://api.upstox.com/v3/feed/market-data-feed/authorize', {
           headers: {
             'Authorization': `Bearer ${settings.upstoxAccessToken}`,
             'Accept': 'application/json'
@@ -138,7 +140,7 @@ const App: React.FC = () => {
 
         const wssUrl = authJson.data.authorizedRedirectUri;
         const ws = new WebSocket(wssUrl);
-        ws.binaryType = 'arraybuffer'; 
+        ws.binaryType = 'arraybuffer'; // Critical for Proto decoding
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -146,7 +148,7 @@ const App: React.FC = () => {
           console.log("Upstox Connected. Subscribing to", settings.upstoxInstrumentKey);
           
           const subscriptionPayload = {
-            guid: "some-guid",
+            guid: "guid-" + Date.now(),
             method: "sub",
             data: {
               mode: "full",
@@ -154,54 +156,88 @@ const App: React.FC = () => {
             }
           };
           
+          // Upstox V3 expects binary payload for subscription
           const enc = new TextEncoder();
           const binaryPayload = enc.encode(JSON.stringify(subscriptionPayload));
           ws.send(binaryPayload); 
         };
 
         ws.onmessage = async (event) => {
-          // Ensure we have an ArrayBuffer
           let arrayBuffer: ArrayBuffer;
+          
+          // Handle Blob (Standard Browser WS behavior for binary)
           if (event.data instanceof Blob) {
               arrayBuffer = await event.data.arrayBuffer();
-          } else if (event.data instanceof ArrayBuffer) {
+          } 
+          // Handle ArrayBuffer (If explicitly set or passed)
+          else if (event.data instanceof ArrayBuffer) {
               arrayBuffer = event.data;
-          } else {
-              return; // Unknown format
+          } 
+          // Log Text Frames
+          else {
+              console.log("Upstox Text Frame:", event.data);
+              return; 
+          }
+
+          const uint8View = new Uint8Array(arrayBuffer);
+          console.log(`Upstox Binary Frame: ${uint8View.byteLength} bytes. Header: ${uint8View[0]}`);
+
+          // STRICT FILTER: A valid FeedResponse Proto message must start with a valid Field Tag.
+          // Field 1 (Type) -> Tag 8 (0x08)
+          // Field 2 (Feeds) -> Tag 18 (0x12)
+          if (uint8View.length === 0) return;
+          const firstByte = uint8View[0];
+          if (firstByte !== 8 && firstByte !== 18) {
+              console.warn("Upstox: Dropping frame (Not Tag 8 or 18). First byte:", firstByte);
+              return;
           }
 
           const decoded = decodeUpstoxMessage(arrayBuffer);
+          
+          if (!decoded) {
+            console.error("Upstox: Decode returned null");
+            // Hex Dump for debugging
+            const hex = Array.from(uint8View).slice(0, 50).map(b => b.toString(16).padStart(2, '0')).join(' ');
+            console.log("Failed Frame Hex (First 50 bytes):", hex);
+            return;
+          }
              
           if (decoded && decoded.feeds) {
-               // The map keys in the feed might not match the requested instrument key exactly if Upstox normalizes them,
-               // but typically they do. We iterate to find the match.
+               // Iterate over keys to find our instrument or process all
                const feedKeys = Object.keys(decoded.feeds);
+               // Simple matching - usually we just want the first one if we only subbed to one
                const targetKey = feedKeys.find(k => k === settings.upstoxInstrumentKey) || feedKeys[0];
                const feed = decoded.feeds[targetKey];
                
                if (feed) {
-                  // Upstox V3 Feed Structure mapping
-                  // FullFeed might contain marketFF or indexFF
+                  // Fallback Extraction Logic for different feed types (Index vs Market)
+                  // FullFeed > MarketFullFeed | IndexFullFeed
                   const ff = feed.fullFeed?.marketFF || feed.fullFeed?.indexFF;
                   const ltpc = feed.ltpc;
                   
-                  // Extract values with fallbacks
-                  // Note: In proto3, defaults are 0, so check for truthiness carefully for prices.
-                  const ltp = ff?.ltpc?.ltp || ltpc?.ltp || ff?.lastTrade?.ltp;
-                  const ltt = ff?.ltpc?.ltt || ltpc?.ltt || ff?.lastTrade?.ltt; // timestamp
-                  const ltq = ff?.ltpc?.ltq || ltpc?.ltq || ff?.lastTrade?.ltq || 0; // quantity
+                  // Extract Data (Priority: Full Feed Last Trade > Full Feed LTPC > Top Level LTPC)
+                  // Proto defaults are 0, so check undefined or use truthiness carefully
+                  const ltp = ff?.lastTrade?.ltp || ff?.ltpc?.ltp || ltpc?.ltp;
+                  const ltt = ff?.lastTrade?.ltt || ff?.ltpc?.ltt || ltpc?.ltt; // timestamp
+                  const ltq = ff?.lastTrade?.ltq || ff?.ltpc?.ltq || ltpc?.ltq || 0; // volume
                   
+                  console.log("Upstox Tick Data:", { key: targetKey, ltp, ltq, ltt });
+
                   if (ltp) {
                     const timestamp = ltt ? Number(ltt) / 1000 : Date.now() / 1000;
                     
                     const tick: Tick = {
                       timestamp: timestamp, 
-                      ltp: ltp,
+                      ltp: Number(ltp),
                       ltq: Number(ltq)
                     };
                     setData(prev => resampleTick(tick, prev, timeframeToSeconds(settings.timeframe)));
                   }
+               } else {
+                 console.log("Upstox: Feed key not found in payload. Keys:", feedKeys);
                }
+          } else {
+             console.log("Upstox: Payload has no 'feeds' field", decoded);
           }
         };
 
@@ -323,6 +359,7 @@ const App: React.FC = () => {
                  <div className="flex flex-col items-center">
                    <div className="w-12 h-12 border-2 border-blue-600/20 border-t-blue-600 rounded-full animate-spin"></div>
                    <span className="mt-6 text-[10px] text-gray-600 font-black tracking-[0.4em] uppercase">Awaiting Feed Stream</span>
+                   <span className="mt-2 text-[8px] text-gray-700 font-mono">Open Console to see Raw Logs</span>
                  </div>
                )}
              </div>
