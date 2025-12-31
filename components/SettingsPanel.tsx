@@ -51,6 +51,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings, is
            >
              <option value="mock">Simulated (Resampling)</option>
              <option value="ws">WebSocket Feed</option>
+             <option value="upstox">Upstox API V3 (Live)</option>
              <option value="custom">Imported Static</option>
            </select>
            
@@ -68,6 +69,37 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ settings, setSettings, is
                  className="bg-blue-600 hover:bg-blue-500 text-white text-[9px] font-bold py-1 rounded transition-colors shadow-lg shadow-blue-600/20"
                >
                  Reconnect
+               </button>
+             </div>
+           )}
+
+           {settings.dataSource === 'upstox' && (
+             <div className="flex flex-col gap-2 mt-2 border-t border-white/10 pt-2">
+               <div className="flex flex-col gap-0.5">
+                 <label className="text-[8px] text-gray-400">Instrument Key</label>
+                 <input 
+                   type="text" 
+                   value={settings.upstoxInstrumentKey} 
+                   onChange={(e) => update('upstoxInstrumentKey', e.target.value)}
+                   className="bg-[#0d1117] border border-[#30363d] text-[10px] text-yellow-400 p-1 rounded font-mono"
+                   placeholder="NSE_FO|49229"
+                 />
+               </div>
+               <div className="flex flex-col gap-0.5">
+                 <label className="text-[8px] text-gray-400">Access Token</label>
+                 <input 
+                   type="password" 
+                   value={settings.upstoxAccessToken} 
+                   onChange={(e) => update('upstoxAccessToken', e.target.value)}
+                   className="bg-[#0d1117] border border-[#30363d] text-[10px] text-white p-1 rounded font-mono"
+                   placeholder="Paste Token Here"
+                 />
+               </div>
+               <button 
+                 onClick={() => update('dataSource', 'upstox')} // Trigger Reconnect
+                 className="bg-green-600 hover:bg-green-500 text-white text-[9px] font-bold py-1.5 rounded transition-colors shadow-lg shadow-green-600/20 mt-1"
+               >
+                 Connect Upstox Feed
                </button>
              </div>
            )}

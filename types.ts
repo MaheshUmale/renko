@@ -44,8 +44,12 @@ export interface IndicatorSettings {
   evwmaLength: number;
   
   // Data Source Config
-  dataSource: 'mock' | 'ws' | 'custom';
+  dataSource: 'mock' | 'ws' | 'custom' | 'upstox';
   wsUrl: string;
+  
+  // Upstox Config
+  upstoxAccessToken: string;
+  upstoxInstrumentKey: string;
 }
 
 export interface VolumeProfileBucket {
